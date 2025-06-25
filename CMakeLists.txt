@@ -37,7 +37,7 @@ include(FetchContent)
 if (ANDROID_ABI STREQUAL "arm64-v8a")
     FetchContent_Declare(
             gum
-            URL "file://${CMAKE_CURRENT_LIST_DIR}/prebuild/arm64/frida-gum-devkit-16.7.19-android-arm64.zip"
+            URL "file://${CMAKE_CURRENT_LIST_DIR}/prebuild/arm64/frida-gum-devkit-17.2.4-android-arm64.zip"
     )
 
 elseif (ANDROID_ABI STREQUAL "armeabi-v7a")
@@ -89,4 +89,4 @@ add_library(gumTVM SHARED
         core/Utils.h
 )
 
-target_link_libraries(gumTVM PRIVATE ${QBDI_LIB_PATH} ${FRIDA_GUM_LIB_PATH} smjni log )
+target_link_libraries(gumTVM PRIVATE ${FRIDA_GUM_LIB_PATH} smjni log )

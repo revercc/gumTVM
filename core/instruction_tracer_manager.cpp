@@ -58,24 +58,29 @@ InstructionTracerManager::InstructionTracerManager() {
 }
 
 InstructionTracerManager::~InstructionTracerManager() {
-    // write_trace();
     g_object_unref(m_stalker);
     g_object_unref(m_transformer);
+    g_object_unref(gum_insterceptor);
+    g_object_unref(common_invocation_listener);
 }
 
 bool InstructionTracerManager::run_attach() {
-    GumInterceptor *insterceptor = gum_interceptor_obtain();
-    gum_interceptor_begin_transaction(insterceptor);
-    gum_invocation_listener = gum_make_call_listener(hook_common_enter, hook_common_leave, this, NULL);
-    auto ret = gum_interceptor_attach(insterceptor,
+    gum_insterceptor = gum_interceptor_obtain();
+    gum_interceptor_begin_transaction(gum_insterceptor);
+    common_invocation_listener = gum_make_call_listener(hook_common_enter, hook_common_leave, this, NULL);
+    auto ret = gum_interceptor_attach(gum_insterceptor,
         (gpointer)target_trace_address,
-        gum_invocation_listener,nullptr, GUM_ATTACH_FLAGS_UNIGNORABLE);
-    gum_interceptor_end_transaction(insterceptor);
+        common_invocation_listener,nullptr, GUM_ATTACH_FLAGS_UNIGNORABLE);
+    gum_interceptor_end_transaction(gum_insterceptor);
     return ret == GUM_ATTACH_OK;
 }
 
-GumInvocationListener* InstructionTracerManager::get_invocation_listener() const{
-    return gum_invocation_listener;
+GumInvocationListener* InstructionTracerManager::get_common_invocation_listener() const{
+    return common_invocation_listener;
+}
+
+GumInterceptor* InstructionTracerManager::get_gum_insterceptor() const{
+    return gum_insterceptor;
 }
 
 LoggerManager* InstructionTracerManager::get_logger_manager() const {

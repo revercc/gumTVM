@@ -7,27 +7,30 @@
 #include <unistd.h>
 #include "common.h"
 #include "instruction_tracer_manager.h"
+// 是否重复trace
+bool repeat_trace = true;
 
 void hook_common_enter(GumInvocationContext * ic, gpointer user_data) {
     auto self = (InstructionTracerManager *)user_data;
-    if (self->get_trace_tid() == 0) {
-        LOGD("FridaStalker::frida_on_enter");
-        self->set_trace_tid(getpid());
+    if (self->get_trace_tid() == 0 || self->get_trace_tid() == gettid()) {
+        // 0x107618
+        LOGD("FridaStalker::frida_on_enter : %d", gettid());
+        self->set_trace_tid(gettid());
         // start trace
-        auto* frida_stalker = new InstructionTracerManager();
-        frida_stalker->follow();
+        self->follow();
     }
 }
 
 void hook_common_leave(GumInvocationContext * ic, gpointer user_data) {
     auto self = (InstructionTracerManager *)user_data;
-    if (self->get_trace_tid() == getpid()) {
+    if (self->get_trace_tid() == gettid()) {
         LOGD("FridaStalker::frida_on_leave");
-        // 取消hook
-        GumInterceptor* insterceptor = gum_interceptor_obtain();
-        gum_interceptor_detach(insterceptor, self->get_invocation_listener());
-        gum_interceptor_begin_transaction(insterceptor);
-        // 更新关闭trace文件
-        self->get_logger_manager()->set_enable_to_file(false, "");
+        self->unfollow();
+        if (repeat_trace == false) {
+            // 取消hook
+            gum_interceptor_detach(self->get_gum_insterceptor(), self->get_common_invocation_listener());
+            // 更新关闭trace文件
+            self->get_logger_manager()->set_enable_to_file(false, "");
+        }
     }
 }

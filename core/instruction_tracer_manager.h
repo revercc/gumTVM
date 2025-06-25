@@ -36,7 +36,8 @@ public:
     [[nodiscard]] module_range_t get_module_range() const;
     [[nodiscard]] std::pair<size_t, size_t> get_plt_range() const;
     bool run_attach();
-    [[nodiscard]] GumInvocationListener* get_invocation_listener() const;
+    [[nodiscard]] GumInvocationListener* get_common_invocation_listener() const;
+    [[nodiscard]] GumInterceptor* get_gum_insterceptor() const;
     [[nodiscard]] LoggerManager* get_logger_manager() const;
     void set_trace_tid(pid_t trace_tid);
     [[nodiscard]] pid_t get_trace_tid() const;
@@ -49,7 +50,8 @@ private:
     GumStalker *m_stalker;
     GumStalkerTransformer *m_transformer;
     GumEventSink *m_sink;
-    GumInvocationListener* gum_invocation_listener;
+    GumInterceptor *gum_insterceptor;
+    GumInvocationListener* common_invocation_listener;
     std::unique_ptr<LoggerManager> logger;
     //target address
     uintptr_t target_trace_address = 0;
