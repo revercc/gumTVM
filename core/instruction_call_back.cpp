@@ -347,34 +347,33 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
     }
     auto self = InstructionTracerManager::get_instance();
 
-    std::stringstream outinfo;
-    std::stringstream postOutput;
-    std::stringstream regOutput;
+    std::stringstream out_info;
+    std::stringstream post_info;
+    std::stringstream dump_reg_info;
     // 遍历操作数并记录写入的寄存器状态
     if (self->write_reg_list.num) {
         for (int i = 0; i < self->write_reg_list.num; i++) {
             uint64_t reg_value = 0;
             if (get_register_value(self->write_reg_list.regs[i], ctx, reg_value)) {
                 const char* reg_name = cs_reg_name( insn_info->handle, self->write_reg_list.regs[i]);
-                postOutput << reg_name << "=0x" << std::hex << reg_value << " ";
-                postOutput.flush();
-                regOutput << self->get_logger_manager()->dump_reg_value(reg_value, reg_name);
+                post_info << reg_name << "=0x" << std::hex << reg_value << " ";
+                post_info.flush();
+                dump_reg_info << self->get_logger_manager()->dump_reg_value(reg_value, reg_name);
             }
         }
         self->write_reg_list.num = 0;
     }
-    if (!postOutput.str().empty()) {
-        outinfo << "\t w[" << postOutput.str() << "]" << std::endl << regOutput.str();
-    }
 
-
+    // 输出当前指令地址和反汇编信息
+    std::stringstream disasm_info;
     uint64_t current_ins_base = self->get_module_range().base;
     if (self->is_address_in_module_range(ctx->pc)) {
-        // 输出当前指令地址和反汇编信息
-        outinfo << "0x" << std::left << std::setw(8) << std::hex << (ctx->pc - current_ins_base) << "   "
+        // 当前主trace模块指令
+        disasm_info << "0x" << std::left << std::setw(8) << std::hex << (ctx->pc - current_ins_base) << "   "
         << std::left << insn_info->insn_copy.mnemonic << "\t"
         << insn_info->insn_copy.op_str;
     } else{
+        // 其他副trace模块指令
         auto& other_modules_range = self->get_trace_other_modules_range();
         for (const auto& [name, range] : other_modules_range) {
             if (ctx->pc > range.first && ctx->pc < range.second) {
@@ -382,24 +381,23 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
             }
         }
 
-        // 输出当前指令地址和反汇编信息
-        outinfo << "0x" << std::left << std::setw(8) << std::hex << ctx->pc << "(" << (ctx->pc - current_ins_base) << ")    "
+        disasm_info << "0x" << std::left << std::setw(8) << std::hex << ctx->pc << "(" << (ctx->pc - current_ins_base) << ")    "
         << std::left << insn_info->insn_copy.mnemonic << "\t"
         << insn_info->insn_copy.op_str;
     }
-
 
     // 针对立即数跳转指令需要计算出其对应偏移
     if (cs_insn_group(insn_info->handle, &insn_info->insn_copy, CS_GRP_JUMP) ||
         cs_insn_group(insn_info->handle, &insn_info->insn_copy, CS_GRP_CALL) ||
         cs_insn_group(insn_info->handle, &insn_info->insn_copy, CS_GRP_RET)) {
         if (insn_info->detail_copy->arm64.operands[0].type == CS_OP_IMM) {
-            outinfo << "(0x" << std::hex << insn_info->detail_copy->arm64.operands[0].imm - current_ins_base << ")";
+            disasm_info << "(0x" << std::hex << insn_info->detail_copy->arm64.operands[0].imm - current_ins_base << ")";
         }
     }
-    outinfo << "   ;";
 
 
+    // 获取寄存器和内存访问信息
+    std::stringstream pre_info;
     std::stringstream memory_access_info;
     for (int i = 0; i < insn_info->detail_copy->arm64.op_count; i++) {
         cs_arm64_op &op = insn_info->detail_copy->arm64.operands[i];
@@ -408,7 +406,7 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
             uint64_t reg_value = 0;
             if (get_register_value(op.reg, ctx, reg_value)) {
                 const char* reg_name = cs_reg_name(insn_info->handle, op.reg);
-                outinfo << std::right << reg_name << " = 0x"
+                pre_info << std::right << reg_name << " = 0x"
                        << std::left << std::hex << reg_value << ", ";
             }
         }
@@ -426,11 +424,11 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
             }
             // 如果有基地址寄存器/索引地址寄存器，先打印
             if (memory_address_info.has_base) {
-                outinfo << std::right << memory_address_info.base_name << " = 0x"
+                pre_info << std::right << memory_address_info.base_name << " = 0x"
                        << std::left << std::hex << memory_address_info.base_value << ", ";
             }
             if (memory_address_info.has_index) {
-                outinfo << std::right << memory_address_info.index_name << " = 0x"
+                pre_info << std::right << memory_address_info.index_name << " = 0x"
                        << std::left << std::hex << memory_address_info.index_value << ", ";
             }
 
@@ -505,9 +503,9 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
             }
         }
     }
-    outinfo << std::endl;
 
     // 解析函数调用信息
+    std::stringstream call_info;
     uintptr_t jmp_addr = 0;
     if (insn_info->insn_copy.id == ARM64_INS_BL &&
         insn_info->detail_copy->arm64.operands[0].type == CS_OP_IMM) {
@@ -530,7 +528,7 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
                 oss << "sub_" << std::hex << (jmp_addr - (uintptr_t)dlInfo.dli_fbase);
                 symName = oss.str().c_str();
             }
-            outinfo << "call addr: " << std::hex << jmp_addr << " [" << soName << "!" << symName << "]" << std::endl;
+            call_info << "call addr: " << std::hex << jmp_addr << " [" << soName << "!" << symName << "]";
         }
     }
     // 开启打印 plt表的外部函数调用会很耗时
@@ -542,13 +540,18 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
     }
     */
 
-    // 打印内存读写信息
-    if (!memory_access_info.str().empty()) {
-        outinfo << "   " << memory_access_info.str() << std::endl;
+    // trace信息写入文件
+    if (!post_info.str().empty()) {
+        out_info << "\t w[" << post_info.str() << "]" << std::endl << dump_reg_info.str();
     }
-
-    // 写入日志文件
-    self->get_logger_manager()->write_info(outinfo);
+    out_info << disasm_info.str() << "   ;" << pre_info.str() << std::endl;
+    if (!call_info.str().empty()) {
+        out_info << call_info.str() << std::endl;
+    }
+    if (!memory_access_info.str().empty()) {
+        out_info << "   " << memory_access_info.str() << std::endl;
+    }
+    self->get_logger_manager()->write_info(out_info);
 }
 
 // typedef void (* GumEventSinkCallback) (const GumEvent * event, GumCpuContext * cpu_context, gpointer user_data);
