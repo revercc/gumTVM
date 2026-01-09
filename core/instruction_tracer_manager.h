@@ -4,12 +4,12 @@
 
 #ifndef STALKER_H
 #define STALKER_H
-#include "logger_manager.h"
-#include "common.h"
 #include <frida-gum.h>
 #include <fstream>
+#include <map>
 #include <string>
-
+#include "common.h"
+#include "logger_manager.h"
 
 
 struct _GumStalker;
@@ -33,6 +33,11 @@ public:
     void unfollow();
     void unfollow(size_t thread_id);
     [[nodiscard]] bool is_address_in_module_range(uintptr_t addr) const;
+    bool is_address_in_other_module_range(uintptr_t addr) const;
+    bool add_trace_other_module_entry(const std::string& name, bool status);
+    bool add_trace_other_module_range_entry(const std::string& name, std::pair<size_t, size_t> range);
+    std::map<std::string, bool>& get_trace_other_modules();
+    std::map<std::string, std::pair<size_t, size_t>>& get_trace_other_modules_range();
     [[nodiscard]] module_range_t get_module_range() const;
     [[nodiscard]] std::pair<size_t, size_t> get_plt_range() const;
     bool run_attach();
@@ -65,5 +70,9 @@ private:
     module_range_t module_range;
     //trace library plt range
     std::pair<size_t, size_t> plt_range;
+    // trace other modules
+    std::map<std::string, bool> trace_other_modules;
+    // trace other modules range
+    std::map<std::string, std::pair<size_t, size_t>> trace_other_modules_range;
 };
 #endif //STALKER_H

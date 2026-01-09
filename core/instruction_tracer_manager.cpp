@@ -123,6 +123,50 @@ bool InstructionTracerManager::is_address_in_module_range(uintptr_t addr) const 
     return true;
 }
 
+bool InstructionTracerManager::is_address_in_other_module_range(uintptr_t addr) const {
+    for (const auto& [name, range] : trace_other_modules_range) {
+        if (addr > range.first && addr < range.second) {
+            return true;
+        }
+    }
+   return false;
+}
+
+// 添加其他trace 模块
+bool InstructionTracerManager::add_trace_other_module_entry(
+                const std::string& name, bool status) {
+
+    // 检查是否已存在
+    if (trace_other_modules.find(name) != trace_other_modules.end()) {
+        // 已存在，可以选择覆盖或返回错误
+        return false;
+    }
+
+    auto result = trace_other_modules.emplace(name, status);
+    return result.second;  // 返回是否插入成功
+}
+
+
+// 添加其他trace 模块 范围
+bool InstructionTracerManager::add_trace_other_module_range_entry(const std::string& name, std::pair<size_t, size_t> range) {
+    // 检查是否已存在
+    if (trace_other_modules_range.find(name) != trace_other_modules_range.end()) {
+        // 已存在，可以选择覆盖或返回错误
+        return false;
+    }
+
+    auto result = trace_other_modules_range.emplace(name, std::move(range));
+    return result.second;  // 返回是否插入成功
+}
+
+std::map<std::string, bool>& InstructionTracerManager::get_trace_other_modules() {
+    return trace_other_modules;
+}
+
+std::map<std::string, std::pair<size_t, size_t>>& InstructionTracerManager::get_trace_other_modules_range() {
+    return trace_other_modules_range;
+}
+
 module_range_t InstructionTracerManager::get_module_range() const {
     return this->module_range;
 }
