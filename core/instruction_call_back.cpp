@@ -261,12 +261,11 @@ bool get_store_register_values(const InstructionInfo *insn, GumCpuContext *ctx,
 }
 
 // 读取内存值
-bool read_memory_value(uintptr_t addr, size_t size, uint64_t &value) {
+void read_memory_value(uintptr_t addr, size_t size, uint64_t &value) {
     if (size == 1) value = *(uint8_t*)addr;
     else if (size == 2) value = *(uint16_t*)addr;
     else if (size == 4) value = *(uint32_t*)addr;
     else if (size == 8) value = *(uint64_t*)addr;
-    return true;
 }
 
 // 是否是原子操作指令
@@ -393,7 +392,7 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
         if (insn_info->detail_copy->arm64.operands[0].type == CS_OP_IMM) {
             disasm_info << "(0x" << std::hex << insn_info->detail_copy->arm64.operands[0].imm - current_ins_base << ")";
         }
-    }
+        }
 
 
     // 获取寄存器和内存访问信息
@@ -477,22 +476,23 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
             else if (op.access & CS_AC_READ) {
                 // 内存读取
                 uint64_t mem_value = 0;
-                if (read_memory_value(memory_address_info.addr, access_size, mem_value)) {
+                if (self->get_logger_manager()->safeReadMemory(
+                    memory_address_info.addr, reinterpret_cast<uint8_t*>(&mem_value), access_size)) {
                     if (!memory_access_info.str().empty()) {
                         memory_access_info << ", ";
                     }
 
                     if (is_pair_instruction) {
-                        // ldp 指令读取两个值
-                        uint64_t mem_value2 = 0;
-                        read_memory_value(memory_address_info.addr + access_size, access_size, mem_value2);
-
                         memory_access_info << "mem[r]:0x" << std::hex << memory_address_info.addr
                                           << " size:" << access_size
                                           << " value:0x" << std::hex << mem_value;
-                        memory_access_info << ", mem[r]:0x" << std::hex << (memory_address_info.addr + access_size)
+                        // ldp 指令读取两个值
+                        uint64_t mem_value2 = 0;
+                        if (self->get_logger_manager()->safeReadMemory(memory_address_info.addr, reinterpret_cast<uint8_t*>(&mem_value2), access_size)) {
+                            memory_access_info << ", mem[r]:0x" << std::hex << (memory_address_info.addr + access_size)
                                           << " size:" << access_size
                                           << " value:0x" << std::hex << mem_value2;
+                        }
                     } else {
                         // 普通加载指令
                         memory_access_info << "mem[r]:0x" << std::hex << memory_address_info.addr
@@ -503,6 +503,7 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
             }
         }
     }
+
 
     // 解析函数调用信息
     std::stringstream call_info;
