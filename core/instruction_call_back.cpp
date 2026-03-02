@@ -511,16 +511,19 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
     std::stringstream call_info;
     uintptr_t jmp_addr = 0;
     if (insn_info->insn_copy.id == ARM64_INS_BL &&
-        insn_info->detail_copy->arm64.operands[0].type == CS_OP_IMM) {
+        insn_info->detail_copy->arm64.operands[0].type == ARM64_OP_IMM) {
         jmp_addr = insn_info->detail_copy->arm64.operands[0].imm;
     } else if (insn_info->insn_copy.id == ARM64_INS_BLR &&
-        insn_info->detail_copy->arm64.operands[0].type == CS_OP_REG) {
+        insn_info->detail_copy->arm64.operands[0].type == ARM64_OP_REG) {
         get_register_value(insn_info->detail_copy->arm64.operands[0].reg, ctx, jmp_addr);
-    } else if (insn_info->insn_copy.id == ARM64_INS_BR && self->is_plt_jmp &&
-        insn_info->detail_copy->arm64.operands[0].type == CS_OP_REG) {
-        self->is_plt_jmp = false;
+    } else if (insn_info->insn_copy.id == ARM64_INS_BR &&
+        insn_info->detail_copy->arm64.op_count == 1 && insn_info->detail_copy->arm64.operands[0].type == CS_OP_REG) {
         get_register_value(insn_info->detail_copy->arm64.operands[0].reg, ctx, jmp_addr);
+        if (self->is_address_in_module_range(jmp_addr) || self->is_address_in_other_module_range(jmp_addr)) {
+            jmp_addr = 0;
+        }
     }
+
     if (jmp_addr != 0) {
         if ((jmp_addr - self->get_module_range().base) <= self->get_plt_range().second &&
             (jmp_addr - self->get_module_range().base) >= self->get_plt_range().first) {
