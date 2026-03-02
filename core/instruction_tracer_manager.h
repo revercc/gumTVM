@@ -22,6 +22,38 @@ struct REG_LIST{
     arm64_reg regs[31] = {};
 };
 
+// 寄存器计数器结构 - 用于为每个寄存器分配唯一编号
+struct RegisterCounter {
+    std::map<std::string, uint64_t> reg_counters;  // 寄存器名 -> 当前计数
+    uint64_t global_counter = 0;                    // 全局计数器
+
+    // 获取寄存器的下一个编号
+    uint64_t get_next_id(const std::string& reg_name) {
+        return ++global_counter;
+    }
+
+    // 重置计数器
+    void reset() {
+        reg_counters.clear();
+        global_counter = 0;
+    }
+};
+
+// 内存地址计数器结构 - 用于为每个内存地址分配唯一编号
+struct MemoryAddressCounter {
+    uint64_t global_counter = 0;  // 全局内存地址计数器
+
+    // 获取下一个内存地址编号
+    uint64_t get_next_id() {
+        return ++global_counter;
+    }
+
+    // 重置计数器
+    void reset() {
+        global_counter = 0;
+    }
+};
+
 class InstructionTracerManager {
 public:
     static InstructionTracerManager *get_instance();
@@ -51,6 +83,10 @@ public:
     REG_LIST write_reg_list;
     // 下一条br指令是plt_jmp指令
     bool is_plt_jmp;
+    // 寄存器计数器 - 用于日志中的寄存器编号
+    RegisterCounter reg_counter;
+    // 内存地址计数器 - 用于日志中的内存地址编号
+    MemoryAddressCounter mem_counter;
 private:
 
     GumStalker *m_stalker;

@@ -50,6 +50,103 @@ bool get_register_value(arm64_reg reg, GumCpuContext* ctx, uint64_t& out_value) 
     return true;
 }
 
+// 获取128位向量寄存器完整值 (用于 Q/V 寄存器)
+bool get_vector_register_value(arm64_reg reg, GumCpuContext* ctx, uint8_t out_value[16]) {
+    int idx = -1;
+
+    if (reg >= ARM64_REG_Q0 && reg <= ARM64_REG_Q31) {
+        idx = reg - ARM64_REG_Q0;
+    } else if (reg >= ARM64_REG_V0 && reg <= ARM64_REG_V31) {
+        idx = reg - ARM64_REG_V0;
+    } else if (reg >= ARM64_REG_D0 && reg <= ARM64_REG_D31) {
+        idx = reg - ARM64_REG_D0;
+    } else if (reg >= ARM64_REG_S0 && reg <= ARM64_REG_S31) {
+        idx = reg - ARM64_REG_S0;
+    } else if (reg >= ARM64_REG_H0 && reg <= ARM64_REG_H31) {
+        idx = reg - ARM64_REG_H0;
+    } else if (reg >= ARM64_REG_B0 && reg <= ARM64_REG_B31) {
+        idx = reg - ARM64_REG_B0;
+    }
+
+    if (idx < 0 || idx > 31) {
+        return false;
+    }
+
+    memcpy(out_value, ctx->v[idx].q, 16);
+    return true;
+}
+
+// 获取浮点寄存器值并格式化为字符串
+std::string get_fp_register_string(arm64_reg reg, GumCpuContext* ctx) {
+    std::stringstream ss;
+    int idx = -1;
+
+    // Q寄存器 (128位)
+    if (reg >= ARM64_REG_Q0 && reg <= ARM64_REG_Q31) {
+        idx = reg - ARM64_REG_Q0;
+        uint64_t low, high;
+        memcpy(&low, ctx->v[idx].q, sizeof(uint64_t));
+        memcpy(&high, ctx->v[idx].q + 8, sizeof(uint64_t));
+        ss << "Q" << idx << "=0x" << std::hex << std::setfill('0')
+           << std::setw(16) << high << std::setw(16) << low;
+    }
+        // V寄存器 (128位向量)
+    else if (reg >= ARM64_REG_V0 && reg <= ARM64_REG_V31) {
+        idx = reg - ARM64_REG_V0;
+        uint64_t low, high;
+        memcpy(&low, ctx->v[idx].q, sizeof(uint64_t));
+        memcpy(&high, ctx->v[idx].q + 8, sizeof(uint64_t));
+        ss << "V" << idx << "=0x" << std::hex << std::setfill('0')
+           << std::setw(16) << high << std::setw(16) << low;
+    }
+        // D寄存器 (64位 double)
+    else if (reg >= ARM64_REG_D0 && reg <= ARM64_REG_D31) {
+        idx = reg - ARM64_REG_D0;
+        double d_val;
+        uint64_t raw_val;
+        memcpy(&d_val, ctx->v[idx].q, sizeof(double));
+        memcpy(&raw_val, ctx->v[idx].q, sizeof(uint64_t));
+        ss << "D" << idx << "=" << d_val << " (0x" << std::hex << raw_val << ")";
+    }
+        // S寄存器 (32位 float)
+    else if (reg >= ARM64_REG_S0 && reg <= ARM64_REG_S31) {
+        idx = reg - ARM64_REG_S0;
+        float s_val;
+        uint32_t raw_val;
+        memcpy(&s_val, ctx->v[idx].q, sizeof(float));
+        memcpy(&raw_val, ctx->v[idx].q, sizeof(uint32_t));
+        ss << "S" << idx << "=" << s_val << " (0x" << std::hex << raw_val << ")";
+    }
+        // H寄存器 (16位 half)
+    else if (reg >= ARM64_REG_H0 && reg <= ARM64_REG_H31) {
+        idx = reg - ARM64_REG_H0;
+        uint16_t raw_val;
+        memcpy(&raw_val, ctx->v[idx].q, sizeof(uint16_t));
+        ss << "H" << idx << "=0x" << std::hex << raw_val;
+    }
+        // B寄存器 (8位 byte)
+    else if (reg >= ARM64_REG_B0 && reg <= ARM64_REG_B31) {
+        idx = reg - ARM64_REG_B0;
+        ss << "B" << idx << "=0x" << std::hex << (int)ctx->v[idx].q[0];
+    }
+    else {
+        return "";
+    }
+
+    return ss.str();
+}
+
+// 判断是否是浮点/向量寄存器
+bool is_fp_vector_register(arm64_reg reg) {
+    return (reg >= ARM64_REG_Q0 && reg <= ARM64_REG_Q31) ||
+           (reg >= ARM64_REG_D0 && reg <= ARM64_REG_D31) ||
+           (reg >= ARM64_REG_S0 && reg <= ARM64_REG_S31) ||
+           (reg >= ARM64_REG_H0 && reg <= ARM64_REG_H31) ||
+           (reg >= ARM64_REG_B0 && reg <= ARM64_REG_B31) ||
+           (reg >= ARM64_REG_V0 && reg <= ARM64_REG_V31);
+}
+
+
 // 获取STP/LDP指令的访问大小
 size_t get_stp_ldp_access_size(const InstructionInfo *insn) {
     // 检查寄存器类型
@@ -76,6 +173,196 @@ size_t get_stp_ldp_access_size(const InstructionInfo *insn) {
     return 8;  // 默认64位
 }
 
+
+// ============ SIMD 指令支持 ============
+
+// 判断是否是SIMD加载指令
+bool is_simd_load(int insn_id) {
+    return insn_id == ARM64_INS_LD1 || insn_id == ARM64_INS_LD2 ||
+           insn_id == ARM64_INS_LD3 || insn_id == ARM64_INS_LD4 ||
+           insn_id == ARM64_INS_LD1R || insn_id == ARM64_INS_LD2R ||
+           insn_id == ARM64_INS_LD3R || insn_id == ARM64_INS_LD4R;
+}
+
+// 判断是否是SIMD存储指令
+bool is_simd_store(int insn_id) {
+    return insn_id == ARM64_INS_ST1 || insn_id == ARM64_INS_ST2 ||
+           insn_id == ARM64_INS_ST3 || insn_id == ARM64_INS_ST4;
+}
+
+// 判断是否是向量寄存器
+bool is_vector_register(arm64_reg reg) {
+    return (reg >= ARM64_REG_V0 && reg <= ARM64_REG_V31) ||
+           (reg >= ARM64_REG_Q0 && reg <= ARM64_REG_Q31);
+}
+
+// 根据VAS获取元素大小
+size_t get_element_size_from_vas(arm64_vas vas) {
+    switch (vas) {
+        case ARM64_VAS_16B:
+        case ARM64_VAS_8B:
+            return 1;  // .b 元素
+        case ARM64_VAS_8H:
+        case ARM64_VAS_4H:
+            return 2;  // .h 元素
+        case ARM64_VAS_4S:
+        case ARM64_VAS_2S:
+            return 4;  // .s 元素
+        case ARM64_VAS_2D:
+        case ARM64_VAS_1D:
+            return 8;  // .d 元素
+        case ARM64_VAS_1Q:
+            return 16; // .q 元素
+        default:
+            return 8;
+    }
+}
+
+// 计算SIMD单次访问大小
+size_t get_simd_access_size(arm64_vas vas, int vector_index) {
+    if (vector_index >= 0) {
+        // 单元素访问
+        return get_element_size_from_vas(vas);
+    } else {
+        // 整向量访问
+        switch (vas) {
+            case ARM64_VAS_16B:
+            case ARM64_VAS_8H:
+            case ARM64_VAS_4S:
+            case ARM64_VAS_2D:
+            case ARM64_VAS_1Q:
+                return 16;
+            case ARM64_VAS_8B:
+            case ARM64_VAS_4H:
+            case ARM64_VAS_2S:
+            case ARM64_VAS_1D:
+                return 8;
+            default:
+                return 16;
+        }
+    }
+}
+
+// 获取向量寄存器中指定元素的值
+uint64_t get_vector_element(GumCpuContext* ctx, arm64_reg reg, arm64_vas vas, int vector_index) {
+    // 获取寄存器索引
+    int idx = -1;
+    if (reg >= ARM64_REG_V0 && reg <= ARM64_REG_V31) {
+        idx = reg - ARM64_REG_V0;
+    } else if (reg >= ARM64_REG_Q0 && reg <= ARM64_REG_Q31) {
+        idx = reg - ARM64_REG_Q0;
+    }
+    if (idx < 0 || idx > 31) return 0;
+
+    // 获取向量数据
+    uint8_t data[16];
+    memcpy(data, ctx->v[idx].q, 16);
+
+    // 根据元素类型提取值
+    switch (vas) {
+        case ARM64_VAS_4S:
+        case ARM64_VAS_2S: {
+            uint32_t* elements = (uint32_t*)data;
+            if (vector_index >= 0 && vector_index < 4) {
+                return elements[vector_index];
+            }
+            break;
+        }
+        case ARM64_VAS_2D:
+        case ARM64_VAS_1D: {
+            uint64_t* elements = (uint64_t*)data;
+            if (vector_index >= 0 && vector_index < 2) {
+                return elements[vector_index];
+            }
+            break;
+        }
+        case ARM64_VAS_8H:
+        case ARM64_VAS_4H: {
+            uint16_t* elements = (uint16_t*)data;
+            if (vector_index >= 0 && vector_index < 8) {
+                return elements[vector_index];
+            }
+            break;
+        }
+        case ARM64_VAS_16B:
+        case ARM64_VAS_8B: {
+            if (vector_index >= 0 && vector_index < 16) {
+                return data[vector_index];
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return 0;
+}
+
+// 获取浮点寄存器大小
+size_t get_fp_register_size(arm64_reg reg) {
+    if (reg >= ARM64_REG_Q0 && reg <= ARM64_REG_Q31) return 16;
+    if (reg >= ARM64_REG_D0 && reg <= ARM64_REG_D31) return 8;
+    if (reg >= ARM64_REG_S0 && reg <= ARM64_REG_S31) return 4;
+    if (reg >= ARM64_REG_H0 && reg <= ARM64_REG_H31) return 2;
+    if (reg >= ARM64_REG_B0 && reg <= ARM64_REG_B31) return 1;
+    if (reg >= ARM64_REG_V0 && reg <= ARM64_REG_V31) return 16;
+    return 8;
+}
+
+// SIMD指令信息结构
+struct SimdInsnInfo {
+    bool is_simd;           // 是否是SIMD指令
+    bool is_store;          // 是否是存储指令
+    int reg_count;          // 涉及的向量寄存器数量
+    arm64_reg regs[4];      // 向量寄存器列表
+    arm64_vas vas;          // 向量排列类型
+    int vector_index;       // 元素索引，-1表示整向量
+    size_t element_size;    // 单元素大小
+    size_t access_size;     // 单次访问大小
+};
+
+// 解析SIMD指令信息
+SimdInsnInfo parse_simd_instruction(const InstructionInfo *insn) {
+    SimdInsnInfo info = {0};
+    info.is_simd = false;
+    info.is_store = false;
+    info.reg_count = 0;
+    info.vas = ARM64_VAS_INVALID;
+    info.vector_index = -1;
+    info.element_size = 8;
+    info.access_size = 8;
+
+    int insn_id = insn->insn_copy.id;
+
+    // 检查是否是SIMD指令
+    if (!is_simd_load(insn_id) && !is_simd_store(insn_id)) {
+        return info;
+    }
+
+    info.is_simd = true;
+    info.is_store = is_simd_store(insn_id);
+
+    // 遍历操作数，查找向量寄存器
+    for (int i = 0; i < insn->detail_copy->arm64.op_count; i++) {
+        cs_arm64_op &op = insn->detail_copy->arm64.operands[i];
+        if (op.type == ARM64_OP_REG && is_vector_register(op.reg)) {
+            if (info.reg_count < 4) {
+                info.regs[info.reg_count++] = op.reg;
+            }
+            // 获取VAS和vector_index（从第一个向量寄存器获取）
+            if (info.vas == ARM64_VAS_INVALID) {
+                info.vas = op.vas;
+                info.vector_index = op.vector_index;
+            }
+        }
+    }
+
+    // 计算元素大小和访问大小
+    info.element_size = get_element_size_from_vas(info.vas);
+    info.access_size = get_simd_access_size(info.vas, info.vector_index);
+
+    return info;
+}
+
 // 判断是否是内存访问指令
 bool is_memory_access_instruction(unsigned int insn_id) {
     static const std::unordered_set<unsigned int> memory_instructions = {
@@ -99,6 +386,13 @@ bool is_memory_access_instruction(unsigned int insn_id) {
         ARM64_INS_LDAPR, ARM64_INS_LDAPRB, ARM64_INS_LDAPRH,
         ARM64_INS_LDAPUR, ARM64_INS_LDAPURB, ARM64_INS_LDAPURH,
         ARM64_INS_LDAPURSW,
+
+        // SIMD 加载指令
+        ARM64_INS_LD1, ARM64_INS_LD2, ARM64_INS_LD3, ARM64_INS_LD4,
+        ARM64_INS_LD1R, ARM64_INS_LD2R, ARM64_INS_LD3R, ARM64_INS_LD4R,
+
+        // SIMD 存储指令
+        ARM64_INS_ST1, ARM64_INS_ST2, ARM64_INS_ST3, ARM64_INS_ST4,
     };
 
     return memory_instructions.count(insn_id) > 0;
@@ -141,7 +435,15 @@ size_t get_memory_access_size(const InstructionInfo *insn) {
         case ARM64_INS_STR:
         case ARM64_INS_STUR:
         case ARM64_INS_STLR:
-            // 需要检查是否是w寄存器
+            // 检查浮点/向量寄存器类型
+            for (int i = 0; i < insn->insn_copy.detail->arm64.op_count; i++) {
+                cs_arm64_op &op = insn->insn_copy.detail->arm64.operands[i];
+                if (op.type == ARM64_OP_REG && is_fp_vector_register(op.reg)) {
+                    access_size = get_fp_register_size(op.reg);
+                    return access_size;
+                }
+            }
+            // 检查是否是w寄存器
             if (strstr(insn->insn_copy.op_str, "w") != nullptr) {
                 access_size = 4;
             }
@@ -152,12 +454,20 @@ size_t get_memory_access_size(const InstructionInfo *insn) {
         case ARM64_INS_LDAR:
         case ARM64_INS_LDAPR:
         case ARM64_INS_LDAPUR:
+            // 检查浮点/向量寄存器类型
+            for (int i = 0; i < insn->insn_copy.detail->arm64.op_count; i++) {
+                cs_arm64_op &op = insn->insn_copy.detail->arm64.operands[i];
+                if (op.type == ARM64_OP_REG && is_fp_vector_register(op.reg)) {
+                    access_size = get_fp_register_size(op.reg);
+                    return access_size;
+                }
+            }
             // 检查是否是w寄存器或有符号字加载
             if (strstr(insn->insn_copy.op_str, "w") != nullptr ||
                 strstr(mnemonic, "ldrsw") != nullptr ||
                 strstr(mnemonic, "ldursw") != nullptr) {
                 access_size = 4;
-            }
+                }
             break;
 
         case ARM64_INS_LDRSW:   // 有符号字加载
@@ -354,12 +664,31 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
     // 遍历操作数并记录写入的寄存器状态
     if (self->write_reg_list.num) {
         for (int i = 0; i < self->write_reg_list.num; i++) {
-            uint64_t reg_value = 0;
-            if (get_register_value(self->write_reg_list.regs[i], ctx, reg_value)) {
-                const char* reg_name = cs_reg_name( insn_info->handle, self->write_reg_list.regs[i]);
-                post_info << reg_name << "=0x" << std::hex << reg_value << " ";
-                post_info.flush();
-                dump_reg_info << self->get_logger_manager()->dump_reg_value(reg_value, reg_name);
+            arm64_reg reg = self->write_reg_list.regs[i];
+            // 检查是否是浮点/向量寄存器，使用专门的格式化函数
+            if (is_fp_vector_register(reg)) {
+                std::string fp_str = get_fp_register_string(reg, ctx);
+                if (!fp_str.empty()) {
+                    // 为浮点寄存器也添加编号
+                    uint64_t reg_id = self->reg_counter.get_next_id(fp_str);
+                    // 解析寄存器名和值，重新格式化
+                    size_t eq_pos = fp_str.find('=');
+                    if (eq_pos != std::string::npos) {
+                        std::string reg_name = fp_str.substr(0, eq_pos);
+                        std::string reg_val = fp_str.substr(eq_pos);
+                        post_info << reg_name << "_" << std::dec << reg_id << reg_val << " ";
+                    } else {
+                        post_info << fp_str << " ";
+                    }
+                }
+            } else {
+                uint64_t reg_value = 0;
+                if (get_register_value(reg, ctx, reg_value)) {
+                    const char* reg_name = cs_reg_name(insn_info->handle, reg);
+                    uint64_t reg_id = self->reg_counter.get_next_id(reg_name);
+                    post_info << reg_name << "_" << std::dec << reg_id << "=0x" << std::hex << reg_value << " ";
+                    dump_reg_info << self->get_logger_manager()->dump_reg_value(reg_value, reg_name);
+                }
             }
         }
         self->write_reg_list.num = 0;
@@ -404,11 +733,29 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
         cs_arm64_op &op = insn_info->detail_copy->arm64.operands[i];
         // 获取读寄存器
         if (op.access & CS_AC_READ && op.type == ARM64_OP_REG) {
-            uint64_t reg_value = 0;
-            if (get_register_value(op.reg, ctx, reg_value)) {
-                const char* reg_name = cs_reg_name(insn_info->handle, op.reg);
-                pre_info << std::right << reg_name << " = 0x"
-                       << std::left << std::hex << reg_value << ", ";
+            // 检查是否是浮点/向量寄存器
+            if (is_fp_vector_register(op.reg)) {
+                std::string fp_str = get_fp_register_string(op.reg, ctx);
+                if (!fp_str.empty()) {
+                    // 为浮点寄存器也添加编号
+                    uint64_t reg_id = self->reg_counter.get_next_id(fp_str);
+                    size_t eq_pos = fp_str.find('=');
+                    if (eq_pos != std::string::npos) {
+                        std::string reg_name_str = fp_str.substr(0, eq_pos);
+                        std::string reg_val = fp_str.substr(eq_pos);
+                        pre_info << "r[" << reg_name_str << "_" << std::dec << reg_id << reg_val << "] ";
+                    } else {
+                        pre_info << "r[" << fp_str << "] ";
+                    }
+                }
+            } else {
+                uint64_t reg_value = 0;
+                if (get_register_value(op.reg, ctx, reg_value)) {
+                    const char* reg_name = cs_reg_name(insn_info->handle, op.reg);
+                    uint64_t reg_id = self->reg_counter.get_next_id(reg_name);
+                    pre_info << "r[" << reg_name << "_" << std::dec << reg_id << "=0x"
+                             << std::hex << reg_value << "] ";
+                }
             }
         }
 
@@ -425,81 +772,153 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
             }
             // 如果有基地址寄存器/索引地址寄存器，先打印
             if (memory_address_info.has_base) {
-                pre_info << std::right << memory_address_info.base_name << " = 0x"
-                       << std::left << std::hex << memory_address_info.base_value << ", ";
+                uint64_t base_reg_id = self->reg_counter.get_next_id(memory_address_info.base_name);
+                pre_info << "r[" << memory_address_info.base_name << "_" << std::dec << base_reg_id
+                         << "=0x" << std::hex << memory_address_info.base_value << "] ";
             }
             if (memory_address_info.has_index) {
-                pre_info << std::right << memory_address_info.index_name << " = 0x"
-                       << std::left << std::hex << memory_address_info.index_value << ", ";
+                uint64_t index_reg_id = self->reg_counter.get_next_id(memory_address_info.index_name);
+                pre_info << "r[" << memory_address_info.index_name << "_" << std::dec << index_reg_id
+                         << "=0x" << std::hex << memory_address_info.index_value << "] ";
             }
 
-            // 获取指令访问size
-            size_t access_size = get_memory_access_size(insn_info);
-            bool is_pair_instruction = false;
-            if (insn_info->insn_copy.id == ARM64_INS_STP || insn_info->insn_copy.id == ARM64_INS_LDP) {
-                is_pair_instruction = true;
-            }
+           // 解析SIMD指令信息
+            SimdInsnInfo simd_info = parse_simd_instruction(insn_info);
 
-            // 解析内存写信息
-            if (op.access & CS_AC_WRITE) {
-                // 内存写入
-                if (is_pair_instruction) {
-                    // stp/ldp 指令（对于ldp，如果是CS_AC_WRITE，表示写入寄存器，不是内存）
-                    std::vector<uint64_t> reg_values;
-                    if (get_store_register_values(insn_info, ctx, reg_values)) {
-                        if (reg_values.size() >= 2) {
-                            if (!memory_access_info.str().empty()) {
-                                memory_access_info << ", ";
+            if (simd_info.is_simd) {
+                // ========== SIMD 指令处理 ==========
+                if (simd_info.is_store) {
+                    // SIMD 存储指令
+                    uintptr_t current_addr = memory_address_info.addr;
+
+                    for (int reg_idx = 0; reg_idx < simd_info.reg_count; reg_idx++) {
+                        uint64_t value = 0;
+
+                        if (simd_info.vector_index >= 0) {
+                            // 单元素存储
+                            value = get_vector_element(ctx, simd_info.regs[reg_idx],
+                                                       simd_info.vas, simd_info.vector_index);
+                        } else {
+                            // 整向量存储 - 获取低64位
+                            int idx = -1;
+                            if (simd_info.regs[reg_idx] >= ARM64_REG_V0 && simd_info.regs[reg_idx] <= ARM64_REG_V31) {
+                                idx = simd_info.regs[reg_idx] - ARM64_REG_V0;
+                            } else if (simd_info.regs[reg_idx] >= ARM64_REG_Q0 && simd_info.regs[reg_idx] <= ARM64_REG_Q31) {
+                                idx = simd_info.regs[reg_idx] - ARM64_REG_Q0;
                             }
-                            memory_access_info << "mem[w]:0x" << std::hex << memory_address_info.addr
-                                              << " size:" << access_size
-                                              << " value:0x" << std::hex << reg_values[0];
-                            memory_access_info << ", mem[w]:0x" << std::hex << (memory_address_info.addr + access_size)
-                                              << " size:" << access_size
-                                              << " value:0x" << std::hex << reg_values[1];
+                            if (idx >= 0 && idx <= 31) {
+                                memcpy(&value, ctx->v[idx].q, sizeof(uint64_t));
+                            }
                         }
+
+                        if (!memory_access_info.str().empty()) {
+                            memory_access_info << ", ";
+                        }
+                        uint64_t mem_id = self->mem_counter.get_next_id();
+                        memory_access_info << "mem[w]_" << std::dec << mem_id << " addr[ 0x" << std::hex << current_addr << " ]"
+                                           << " size:" << std::dec << simd_info.access_size
+                                           << " value:0x" << std::hex << value;
+
+                        current_addr += simd_info.access_size;
                     }
                 } else {
-                    // 普通存储指令
-                    std::vector<uint64_t> reg_values;
-                    if (get_store_register_values(insn_info, ctx, reg_values)) {
-                        if (!reg_values.empty()) {
+                    // SIMD 加载指令
+                    uintptr_t current_addr = memory_address_info.addr;
+
+                    for (int reg_idx = 0; reg_idx < simd_info.reg_count; reg_idx++) {
+                        uint64_t mem_value = 0;
+                        size_t read_size = (simd_info.access_size > 8) ? 8 : simd_info.access_size;
+
+                        if (self->get_logger_manager()->safeReadMemory(
+                                current_addr, reinterpret_cast<uint8_t*>(&mem_value), read_size)) {
                             if (!memory_access_info.str().empty()) {
                                 memory_access_info << ", ";
                             }
-                            memory_access_info << "mem[w]:0x" << std::hex << memory_address_info.addr
-                                              << " size:" << access_size
-                                              << " value:0x" << std::hex << reg_values[0];
+                            uint64_t mem_id = self->mem_counter.get_next_id();
+                            memory_access_info << "mem[r]_" << std::dec << mem_id << " addr[ 0x" << std::hex << current_addr << " ]"
+                                               << " size:" << std::dec << simd_info.access_size
+                                               << " value:0x" << std::hex << mem_value;
+                        }
+
+                        current_addr += simd_info.access_size;
+                    }
+                }
+            } else {
+                // ========== 普通内存指令处理 ==========
+                // 获取指令访问size
+                size_t access_size = get_memory_access_size(insn_info);
+                bool is_pair_instruction = false;
+                if (insn_info->insn_copy.id == ARM64_INS_STP || insn_info->insn_copy.id == ARM64_INS_LDP) {
+                    is_pair_instruction = true;
+                }
+
+                // 解析内存写信息
+                if (op.access & CS_AC_WRITE) {
+                    // 内存写入
+                    if (is_pair_instruction) {
+                        // stp/ldp 指令（对于ldp，如果是CS_AC_WRITE，表示写入寄存器，不是内存）
+                        std::vector<uint64_t> reg_values;
+                        if (get_store_register_values(insn_info, ctx, reg_values)) {
+                            if (reg_values.size() >= 2) {
+                                if (!memory_access_info.str().empty()) {
+                                    memory_access_info << ", ";
+                                }
+                                uint64_t mem_id1 = self->mem_counter.get_next_id();
+                                memory_access_info << "mem[w]_" << std::dec << mem_id1 << " addr[ 0x" << std::hex << memory_address_info.addr << " ]"
+                                                   << " size:" << std::dec << access_size
+                                                   << " value:0x" << std::hex << reg_values[0];
+                                uint64_t mem_id2 = self->mem_counter.get_next_id();
+                                memory_access_info << ", mem[w]_" << std::dec << mem_id2 << " addr[ 0x" << std::hex << (memory_address_info.addr + access_size) << " ]"
+                                                   << " size:" << std::dec << access_size
+                                                   << " value:0x" << std::hex << reg_values[1];
+                            }
+                        }
+                    } else {
+                        // 普通存储指令
+                        std::vector<uint64_t> reg_values;
+                        if (get_store_register_values(insn_info, ctx, reg_values)) {
+                            if (!reg_values.empty()) {
+                                if (!memory_access_info.str().empty()) {
+                                    memory_access_info << ", ";
+                                }
+                                uint64_t mem_id = self->mem_counter.get_next_id();
+                                memory_access_info << "mem[w]_" << std::dec << mem_id << " addr[ 0x" << std::hex << memory_address_info.addr << " ]"
+                                                   << " size:" << std::dec << access_size
+                                                   << " value:0x" << std::hex << reg_values[0];
+                            }
                         }
                     }
                 }
-            }
-            // 解析内存读信息
-            else if (op.access & CS_AC_READ) {
-                // 内存读取
-                uint64_t mem_value = 0;
-                if (self->get_logger_manager()->safeReadMemory(
-                    memory_address_info.addr, reinterpret_cast<uint8_t*>(&mem_value), access_size)) {
-                    if (!memory_access_info.str().empty()) {
-                        memory_access_info << ", ";
-                    }
-
-                    if (is_pair_instruction) {
-                        memory_access_info << "mem[r]:0x" << std::hex << memory_address_info.addr
-                                          << " size:" << access_size
-                                          << " value:0x" << std::hex << mem_value;
-                        // ldp 指令读取两个值
-                        uint64_t mem_value2 = 0;
-                        if (self->get_logger_manager()->safeReadMemory(memory_address_info.addr, reinterpret_cast<uint8_t*>(&mem_value2), access_size)) {
-                            memory_access_info << ", mem[r]:0x" << std::hex << (memory_address_info.addr + access_size)
-                                          << " size:" << access_size
-                                          << " value:0x" << std::hex << mem_value2;
+                    // 解析内存读信息
+                else if (op.access & CS_AC_READ) {
+                    // 内存读取
+                    uint64_t mem_value = 0;
+                    if (self->get_logger_manager()->safeReadMemory(
+                            memory_address_info.addr, reinterpret_cast<uint8_t*>(&mem_value), access_size)) {
+                        if (!memory_access_info.str().empty()) {
+                            memory_access_info << ", ";
                         }
-                    } else {
-                        // 普通加载指令
-                        memory_access_info << "mem[r]:0x" << std::hex << memory_address_info.addr
-                                          << " size:" << access_size
-                                          << " value:0x" << std::hex << mem_value;
+
+                        if (is_pair_instruction) {
+                            uint64_t mem_id1 = self->mem_counter.get_next_id();
+                            memory_access_info << "mem[r]_" << std::dec << mem_id1 << " addr[ 0x" << std::hex << memory_address_info.addr << " ]"
+                                               << " size:" << std::dec << access_size
+                                               << " value:0x" << std::hex << mem_value;
+                            // ldp 指令读取两个值
+                            uint64_t mem_value2 = 0;
+                            if (self->get_logger_manager()->safeReadMemory(memory_address_info.addr + access_size, reinterpret_cast<uint8_t*>(&mem_value2), access_size)) {
+                                uint64_t mem_id2 = self->mem_counter.get_next_id();
+                                memory_access_info << ", mem[r]_" << std::dec << mem_id2 << " addr[ 0x" << std::hex << (memory_address_info.addr + access_size) << " ]"
+                                                   << " size:" << std::dec << access_size
+                                                   << " value:0x" << std::hex << mem_value2;
+                            }
+                        } else {
+                            // 普通加载指令
+                            uint64_t mem_id = self->mem_counter.get_next_id();
+                            memory_access_info << "mem[r]_" << std::dec << mem_id << " addr[ 0x" << std::hex << memory_address_info.addr << " ]"
+                                               << " size:" << std::dec << access_size
+                                               << " value:0x" << std::hex << mem_value;
+                        }
                     }
                 }
             }

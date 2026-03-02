@@ -34,6 +34,16 @@ void trip_doCommand_enter(GumInvocationContext * ic, gpointer user_data) {
 }
 
 
+void test_enter(GumInvocationContext * ic, gpointer user_data) {
+    auto self = (InstructionTracerManager *)user_data;
+    LOGD("FridaStalker::frida_on_enter : %d", gettid());
+    trace_is_running = true;
+    self->set_trace_tid(gettid());
+    // start trace
+    self->follow();
+}
+
+
 void hook_common_enter(GumInvocationContext * ic, gpointer user_data) {
     auto self = (InstructionTracerManager *)user_data;
     if (self->get_trace_tid() == 0 || self->get_trace_tid() == gettid()) {
@@ -44,7 +54,7 @@ void hook_common_enter(GumInvocationContext * ic, gpointer user_data) {
 
         // trace 是否已经再跑，不允许重复进入trace
         if (trace_is_running == false) {
-            trip_doCommand_enter(ic, user_data);
+            test_enter(ic, user_data);
         }
     }
 }
