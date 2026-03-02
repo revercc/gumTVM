@@ -77,8 +77,8 @@ size_t get_stp_ldp_access_size(const InstructionInfo *insn) {
 }
 
 // 判断是否是内存访问指令
-bool is_memory_access_instruction(int insn_id) {
-    static const std::unordered_set<int> memory_instructions = {
+bool is_memory_access_instruction(unsigned int insn_id) {
+    static const std::unordered_set<unsigned int> memory_instructions = {
         // 存储指令
         ARM64_INS_STR, ARM64_INS_STRB, ARM64_INS_STRH,
         ARM64_INS_STUR, ARM64_INS_STURB, ARM64_INS_STURH,
@@ -107,7 +107,7 @@ bool is_memory_access_instruction(int insn_id) {
 // 获取指令的访问大小
 size_t get_memory_access_size(const InstructionInfo *insn) {
     size_t access_size = 8;  // 默认64位
-    int insn_id = insn->insn_copy.id;
+    unsigned int insn_id = insn->insn_copy.id;
     const char* mnemonic = insn->insn_copy.mnemonic;
 
     switch (insn_id) {
@@ -391,7 +391,7 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
     if (cs_insn_group(insn_info->handle, &insn_info->insn_copy, CS_GRP_JUMP) ||
         cs_insn_group(insn_info->handle, &insn_info->insn_copy, CS_GRP_CALL) ||
         cs_insn_group(insn_info->handle, &insn_info->insn_copy, CS_GRP_RET)) {
-        if (insn_info->detail_copy->arm64.operands[0].type == CS_OP_IMM) {
+        if (insn_info->detail_copy->arm64.operands[0].type == ARM64_OP_IMM) {
             disasm_info << "(0x" << std::hex << insn_info->detail_copy->arm64.operands[0].imm - current_ins_base << ")";
         }
         }
@@ -517,7 +517,7 @@ void instruction_callback(GumCpuContext *context, void *user_data) {
         insn_info->detail_copy->arm64.operands[0].type == ARM64_OP_REG) {
         get_register_value(insn_info->detail_copy->arm64.operands[0].reg, ctx, jmp_addr);
     } else if (insn_info->insn_copy.id == ARM64_INS_BR &&
-        insn_info->detail_copy->arm64.op_count == 1 && insn_info->detail_copy->arm64.operands[0].type == CS_OP_REG) {
+        insn_info->detail_copy->arm64.op_count == 1 && insn_info->detail_copy->arm64.operands[0].type == ARM64_OP_REG) {
         get_register_value(insn_info->detail_copy->arm64.operands[0].reg, ctx, jmp_addr);
         if (self->is_address_in_module_range(jmp_addr) || self->is_address_in_other_module_range(jmp_addr)) {
             jmp_addr = 0;
