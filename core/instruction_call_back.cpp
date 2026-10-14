@@ -509,6 +509,95 @@ size_t get_memory_access_size(const InstructionInfo *insn) {
 }
 
 
+static uint64_t sign_extend(uint64_t value, unsigned bits) {
+    if (bits >= 64) {
+        return value;
+    }
+
+    const uint64_t mask = (UINT64_C(1) << bits) - 1;
+    const uint64_t sign_bit = UINT64_C(1) << (bits - 1);
+
+    value &= mask;
+    return (value ^ sign_bit) - sign_bit;
+}
+
+static uint64_t apply_arm64_extension(uint64_t value, arm64_extender ext) {
+    switch (ext) {
+        case ARM64_EXT_UXTB:
+            return value & UINT64_C(0xff);
+
+        case ARM64_EXT_UXTH:
+            return value & UINT64_C(0xffff);
+
+        case ARM64_EXT_UXTW:
+            return value & UINT64_C(0xffffffff);
+
+        case ARM64_EXT_UXTX:
+            return value;
+
+        case ARM64_EXT_SXTB:
+            return sign_extend(value, 8);
+
+        case ARM64_EXT_SXTH:
+            return sign_extend(value, 16);
+
+        case ARM64_EXT_SXTW:
+            return sign_extend(value, 32);
+
+        case ARM64_EXT_SXTX:
+            return value;
+
+        case ARM64_EXT_INVALID:
+        default:
+            return value;
+    }
+}
+
+static bool apply_arm64_shift(
+    uint64_t value,
+    const cs_arm64_op &op,
+    uint64_t &result
+) {
+    const unsigned shift = op.shift.value;
+
+    if (shift >= 64) {
+        return false;
+    }
+
+    switch (op.shift.type) {
+        case ARM64_SFT_INVALID:
+            result = value;
+            return true;
+
+        case ARM64_SFT_LSL:
+            result = value << shift;
+            return true;
+
+        case ARM64_SFT_LSR:
+            result = value >> shift;
+            return true;
+
+        case ARM64_SFT_ASR:
+            result = static_cast<uint64_t>(
+                static_cast<int64_t>(value) >> shift
+            );
+            return true;
+
+        case ARM64_SFT_ROR:
+            if (shift == 0) {
+                result = value;
+            } else {
+                result = (value >> shift) | (value << (64 - shift));
+            }
+            return true;
+
+        default:
+            // ARM64 内存寄存器偏移通常只会使用 LSL。
+            return false;
+    }
+}
+
+
 // 获取内存地址和相关寄存器信息
 struct MemoryAddressInfo {
     uintptr_t addr;           // 计算后的内存地址
@@ -549,8 +638,24 @@ bool get_memory_address_info(csh handle, const cs_arm64_op &op, GumCpuContext *c
         info.index_name = cs_reg_name(handle, op.mem.index);
     }
 
+    uint64_t effective_index = info.index_value;
+
+    if (info.has_index) {
+        // ARM64 地址计算顺序：先扩展，再移位。
+        effective_index =
+            apply_arm64_extension(effective_index, op.ext);
+
+        if (!apply_arm64_shift(effective_index, op, effective_index)) {
+            return false;
+        }
+    }
+
     // 计算地址
-    info.addr = info.base_value + info.index_value + op.mem.disp;
+    // uint64_t 加法保留 CPU 的 64 位回绕语义，也能处理负 displacement。
+    info.addr =
+        info.base_value +
+        effective_index +
+        static_cast<uint64_t>(op.mem.disp);
     return true;
 }
 
